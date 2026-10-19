@@ -270,7 +270,11 @@ func (mbox *mailbox) fetchBodySection(msg *protonmail.Message, section *imap.Bod
 	b := new(bytes.Buffer)
 
 	if len(section.Path) == 0 {
-		w, err := message.CreateWriter(b, messageHeader(msg))
+		h := messageHeader(msg)
+		if section.Specifier == imap.HeaderSpecifier && len(section.Fields) > 0 {
+			return headerFieldsLiteral(h, section)
+		}
+		w, err := message.CreateWriter(b, h)
 		if err != nil {
 			return nil, err
 		}
@@ -354,6 +358,9 @@ func (mbox *mailbox) fetchBodySection(msg *protonmail.Message, section *imap.Bod
 			}
 		}
 
+		if section.Specifier == imap.HeaderSpecifier && len(section.Fields) > 0 {
+			return headerFieldsLiteral(h, section)
+		}
 		w, err := message.CreateWriter(b, h)
 		if err != nil {
 			return nil, err
