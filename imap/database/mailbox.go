@@ -181,6 +181,44 @@ func (mbox *Mailbox) ForEach(f func(seqNum, uid uint32, apiID string) error) err
 	})
 }
 
+// Prune deletes every entry whose API ID is not in keep and returns the
+// sequence numbers that vanished, highest first, so callers can expunge.
+func (mbox *Mailbox) Prune(keep map[string]struct{}) ([]uint32, error) {
+	var seqNums []uint32
+	err := mbox.u.db.Update(func(tx *bolt.Tx) error {
+		b, err := mbox.bucket(tx)
+		if err != nil {
+			return err
+		}
+
+		var gone [][]byte
+		c := b.Cursor()
+		var n uint32 = 1
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if _, ok := keep[string(v)]; !ok {
+				gone = append(gone, append([]byte(nil), k...))
+				seqNums = append(seqNums, n)
+			}
+			n++
+		}
+
+		for _, k := range gone {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for i, j := 0, len(seqNums)-1; i < j; i, j = i+1, j-1 {
+		seqNums[i], seqNums[j] = seqNums[j], seqNums[i]
+	}
+	return seqNums, nil
+}
+
 func (mbox *Mailbox) Reset() error {
 	return mbox.u.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(mailboxesBucket)

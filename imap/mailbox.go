@@ -110,11 +110,9 @@ func (mbox *mailbox) Check() error {
 func (mbox *mailbox) sync() error {
 	log.Printf("Synchronizing mailbox %v...", mbox.name)
 
-	// TODO: don't do this without incrementing UIDVALIDITY
-	if err := mbox.db.Reset(); err != nil {
-		return err
-	}
-
+	// Existing entries keep their UIDs; only messages missing from the
+	// listing are removed afterwards, so UIDVALIDITY can stay constant.
+	seen := make(map[string]struct{})
 	filter := &protonmail.MessageFilter{
 		PageSize: 150,
 		Label:    mbox.label,
@@ -139,8 +137,21 @@ func (mbox *mailbox) sync() error {
 		if err := mbox.db.Sync(page); err != nil {
 			return err
 		}
+		for _, msg := range page {
+			seen[msg.ID] = struct{}{}
+		}
 
 		filter.Page++
+	}
+
+	seqNums, err := mbox.db.Prune(seen)
+	if err != nil {
+		return err
+	}
+	// No EXPUNGE is sent: sync runs inside FETCH, STORE and SEARCH, where
+	// RFC 3501 forbids untagged EXPUNGE responses.
+	if len(seqNums) > 0 {
+		log.Printf("mailbox %s: %d messages gone since last sync", mbox.name, len(seqNums))
 	}
 
 	log.Printf("Synchronizing mailbox %v: done.", mbox.name)
@@ -169,7 +180,7 @@ func (mbox *mailbox) reset() error {
 	defer mbox.Unlock()
 
 	mbox.initialized = false
-	return mbox.db.Reset()
+	return nil
 }
 
 func (mbox *mailbox) fetchFlags(msg *protonmail.Message) []string {
