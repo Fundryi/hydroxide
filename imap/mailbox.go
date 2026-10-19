@@ -77,10 +77,11 @@ func (mbox *mailbox) Status(items []imap.StatusItem) (*imap.MailboxStatus, error
 	mbox.Lock()
 	defer mbox.Unlock()
 
+	var wantMessages, wantUnseen bool
 	for _, name := range items {
 		switch name {
 		case imap.StatusMessages:
-			status.Messages = uint32(mbox.total)
+			wantMessages = true
 		case imap.StatusUidNext:
 			uidNext, err := mbox.db.UidNext()
 			if err != nil {
@@ -92,8 +93,39 @@ func (mbox *mailbox) Status(items []imap.StatusItem) (*imap.MailboxStatus, error
 		case imap.StatusRecent:
 			status.Recent = 0
 		case imap.StatusUnseen:
-			status.Unseen = uint32(mbox.unread)
+			wantUnseen = true
 		}
+	}
+
+	if !wantMessages && !wantUnseen {
+		return status, nil
+	}
+
+	// The Proton counters are only right at login; once the mailbox has been
+	// synced, the local database follows every event and is the truth.
+	total, unread := uint32(mbox.total), uint32(mbox.unread)
+	if mbox.initialized {
+		var apiIDs []string
+		err := mbox.db.ForEach(func(_, _ uint32, apiID string) error {
+			apiIDs = append(apiIDs, apiID)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		total, unread = uint32(len(apiIDs)), 0
+		for _, apiID := range apiIDs {
+			// A message missing from the cache counts as read.
+			if msg, err := mbox.u.db.Message(apiID); err == nil && msg.Unread == 1 {
+				unread++
+			}
+		}
+	}
+	if wantMessages {
+		status.Messages = total
+	}
+	if wantUnseen {
+		status.Unseen = unread
 	}
 
 	return status, nil
