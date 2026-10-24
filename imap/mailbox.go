@@ -259,7 +259,18 @@ func (mbox *mailbox) fetchMessage(isUid bool, id uint32, items []imap.FetchItem)
 	}
 
 	msg, err := mbox.u.db.Message(apiID)
-	if err != nil {
+	if err == database.ErrNotFound {
+		// The mailbox lists the message but the cache lost it (a refresh
+		// event, or an event that ran ahead). Fetch it so every sequence
+		// number answers; FETCH responses must match EXISTS.
+		msg, err = mbox.u.c.GetMessage(apiID)
+		if err != nil {
+			log.Printf("mailbox %s: cannot fetch message %s: %v", mbox.name, apiID, err)
+			msg = &protonmail.Message{ID: apiID, Sender: &protonmail.MessageAddress{}}
+		} else if _, err := mbox.u.db.CreateMessage(msg); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -321,7 +332,15 @@ func (mbox *mailbox) ListMessages(uid bool, seqSet *imap.SeqSet, items []imap.Fe
 				}
 				stop = uidNext - 1
 			} else {
-				stop = uint32(mbox.total)
+				// mbox.total is Proton's count at login; the bucket is what
+				// EXISTS reported, so "*" must end there.
+				err := mbox.db.ForEach(func(seqNum, _ uint32, _ string) error {
+					stop = seqNum
+					return nil
+				})
+				if err != nil {
+					return err
+				}
 			}
 		}
 
