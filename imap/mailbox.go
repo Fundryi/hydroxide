@@ -617,8 +617,12 @@ func (mbox *mailbox) MoveMessages(uid bool, seqSet *imap.SeqSet, destName string
 	if err := mbox.u.c.LabelMessages(dest.label, apiIDs); err != nil {
 		return err
 	}
-	if err := mbox.u.c.UnlabelMessages(mbox.label, apiIDs); err != nil {
-		return err
+	// Proton refuses to remove the All Mail label (error 2011); the message
+	// stays in All Mail by definition, so the move is complete after labeling.
+	if mbox.label != protonmail.LabelAllMail {
+		if err := mbox.u.c.UnlabelMessages(mbox.label, apiIDs); err != nil {
+			return err
+		}
 	}
 	return mbox.Poll()
 }
