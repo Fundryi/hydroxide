@@ -2,12 +2,14 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"golang.org/x/crypto/bcrypt"
@@ -203,7 +205,43 @@ type Manager struct {
 	sessions  map[string]*session
 }
 
+// hubBridgePassword returns the account's bridge password from
+// bridge-passwords.json (written by the hub's Proton login page) when the
+// presented password is the shared hub password, else "".
+func hubBridgePassword(username, password string) string {
+	hub := os.Getenv("HYDROXIDE_HUB_PASSWORD")
+	if hub == "" || subtle.ConstantTimeCompare([]byte(password), []byte(hub)) != 1 {
+		return ""
+	}
+	p, err := config.Path("bridge-passwords.json")
+	if err != nil {
+		return ""
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	var store map[string]struct {
+		Email          string `json:"email"`
+		BridgePassword string `json:"bridge_password"`
+	}
+	if err := json.NewDecoder(f).Decode(&store); err != nil {
+		return ""
+	}
+	for name, entry := range store {
+		if strings.EqualFold(name, username) || (entry.Email != "" && strings.EqualFold(entry.Email, username)) {
+			return entry.BridgePassword
+		}
+	}
+	return ""
+}
+
 func (m *Manager) Auth(username, password string) (*protonmail.Client, openpgp.EntityList, uint64, error) {
+	if bridge := hubBridgePassword(username, password); bridge != "" {
+		password = bridge
+	}
+
 	var secretKey [32]byte
 	passwordBytes, err := base64.StdEncoding.DecodeString(password)
 	if err != nil || len(passwordBytes) != len(secretKey) {
